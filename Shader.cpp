@@ -77,8 +77,13 @@ void Shader::use()
 
 void Shader::destroy()
 {
-	if (program)
+	if (program != NULL)
 		glDeleteProgram(program);
+}
+
+void Shader::setNULL()
+{
+	program = NULL;
 }
 
 GLuint Shader::id()

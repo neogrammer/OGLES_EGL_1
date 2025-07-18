@@ -14,6 +14,7 @@ EGLNativeWindowType eglNativeWindow;
 EGLNativeDisplayType eglNativeDisplay;
 EGLDisplay display;
 EGLContext context;
+void* terrainData;
 
 int width = 1600;
 int height = 900;
@@ -24,13 +25,18 @@ App app{};
 
 LRESULT WINAPI windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    LRESULT  lRet = 1;
 
     switch (uMsg)
     {
     case WM_CREATE:
         break;
-
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE)
+        {
+            PostQuitMessage(0);
+        }
+        
+        break;
     case WM_PAINT:
     {
         if (display)
@@ -80,11 +86,10 @@ LRESULT WINAPI windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     break;
 
     default:
-        lRet = DefWindowProc(hWnd, uMsg, wParam, lParam);
         break;
     }
 
-    return lRet;
+    return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
 
@@ -249,11 +254,16 @@ int main()
    
     app.resize((void*)display, (void*)eglSurface, 1600, 900);
 
-    if (!app.init((void*)display))
+    void* data{ nullptr };
+    if (!app.init((void*)display,data))
     {
-        std::cout << "App unable to be initialized" << std::endl;
+        std::cout << "App unable to be initialized - oart1" << std::endl;
         return -420;
     }
+   
+        
+    terrainData = data;
+
 
     GLfloat   lineWidthRange[2];
     glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lineWidthRange);

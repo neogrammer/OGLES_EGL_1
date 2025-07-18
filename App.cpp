@@ -1,11 +1,5 @@
-#include <App.h>
+﻿#include <App.h>
 
-#include <iostream>
-#include <EGL/egl.h>
-#include <GLES3/gl3.h>
-#include <random>
-#include <cstdlib> // For rand() and srand()
-#include <ctime>  
 #define VERTEX_POS_SIZE 3
 #define VERTEX_COLOR_SIZE 4
 #define VERTEX_POS_INDX 0
@@ -18,6 +12,7 @@
 #define POSITION_LOC    0
 #define COLOR_LOC       1
 #define MVP_LOC         2
+#define TERRAIN_LOC     4
 
 
 //
@@ -37,6 +32,32 @@ const GLchar* const lineShaderFragStr =
 "void main()\n"
 "{\n"
 "fragColor = vec4(0.0,0.0,0.0,1.0);\n"
+"}";
+
+const GLchar* const heightTerrainVertStr =
+"#version 300 es\n"
+"uniform mat4 u_mvpMatrix;\n"
+"uniform vec3 u_lightDirection;\n"
+"layout(location = 0) in vec4 a_position;\n"
+"uniform sampler2D s_texture;\n"
+"out vec4 v_color;\n"
+"void main()\n"
+"{\n"
+// compute vertex normal from height map
+"float hxl = textureOffset(s_texture, a_position.xy, ivec2(-1, 0)).w;\n"
+"float hxr = textureOffset(s_texture, a_position.xy, ivec2(1, 0)).w;\n"
+"float hyl = textureOffset(s_texture, a_position.xy, ivec2(0, -1)).w;\n"
+"float hyr = textureOffset(s_texture, a_position.xy, ivec2(0, 1)).w;\n"
+"vec3 u = normalize(vec3(0.05, 0.0, hxr-hxl));\n"
+"vec3 v = normalize(vec3(0.0, 0.05, hyr-hyl));\n"
+"vec3 normal = cross(u, v);\n"
+"// compute diffuse lighting\n"
+"float diffuse = dot(normal, u_lightDirection);\n"
+"v_color = vec4(vec3(diffuse), 1.0);\n"
+"// get vertex position from height map\n"
+"float h = texture(s_texture, a_position.xy).w;\n"
+"vec4 v_position = vec4(a_position.xy,h / 2.5, a_position.w);\n"
+"gl_Position = u_mvpMatrix * v_position;\n"
 "}";
 
 //const GLchar* const vShaderStr =
@@ -112,10 +133,21 @@ void App::shutdown()
    // glDeleteBuffers(1, &mvpVBO);
     glDeleteBuffers(1, &indicesIBO);
     glDeleteBuffers(1, &edgeVBO);
+    glDeleteTextures(1, &texture1);
+    
+    if (terrainData)
+    {
+        glDeleteBuffers(1, &terrainData->positionVBO);
+        glDeleteBuffers(1, &terrainData->indicesIBO);
+        glDeleteProgram(terrainData->programObject);
+        delete terrainData;
+    }
+
+
 
 }
 
-bool App::init(void* display)
+bool App::init(void* display, void* terrData)
 {
     srand((unsigned int)time(0));
     angle = 0.f;
@@ -129,7 +161,7 @@ bool App::init(void* display)
     mvpLocation = glGetUniformLocation(basicShdr.id(), "a_mvpMatrix");
 
     glUseProgram(0);
-
+  
     if (!lineShader.setup(&lineShaderVertStr, &lineShaderFragStr)) {
         std::cout << "line Shader not setup!" << std::endl;
         return false;
@@ -154,9 +186,9 @@ bool App::init(void* display)
     glGenBuffers(1, &positionVBO);
     glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
     glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(GLfloat) * 3, positions, GL_STATIC_DRAW);
-    glVertexAttribPointer(POSITION_LOC, 3, GL_FLOAT,
+    glVertexAttribPointer(0, 3, GL_FLOAT,
         GL_FALSE, 3 * sizeof(GLfloat), (const void*)NULL);
-    glEnableVertexAttribArray(POSITION_LOC);
+    glEnableVertexAttribArray(0);
     free(positions);
 
     // Random color for each instance
@@ -216,9 +248,9 @@ bool App::init(void* display)
         glGenBuffers(1, &colorVBO);
         glBindBuffer(GL_ARRAY_BUFFER, colorVBO);
         glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(GLfloat) *  4, cubecolors, GL_STATIC_DRAW);
-        glVertexAttribPointer(COLOR_LOC, 4, GL_FLOAT,
+        glVertexAttribPointer(1, 4, GL_FLOAT,
             GL_FALSE, 4 * sizeof(GLfloat), (const void*)0);
-        glEnableVertexAttribArray(COLOR_LOC);
+        glEnableVertexAttribArray(1);
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -226,22 +258,22 @@ bool App::init(void* display)
 
     GLfloat cubeEdges[72] = {
         // Bottom face
-        -1.0f, -1.0f, -1.01f,   1.0f, -1.0f, -1.01f,   // Edge: bottom front
-         1.01f, -1.0f, -1.0f,   1.01f, -1.0f,  1.0f,   // Edge: bottom right
-         1.0f, -1.0f,  1.01f,  -1.0f, -1.0f,  1.01f,   // Edge: bottom back
-        -1.01f, -1.0f,  1.0f,  -1.01f, -1.0f, -1.0f,   // Edge: bottom left
+        -1.0f, -1.0f, -1.0001f,   1.0f, -1.0f, -1.0001f,   // Edge: bottom front
+         1.0001f, -1.0f, -1.0f,   1.0001f, -1.0f,  1.0f,   // Edge: bottom right
+         1.0f, -1.0f,  1.0001f,  -1.0f, -1.0f,  1.0001f,   // Edge: bottom back
+        -1.0001f, -1.0f,  1.0f,  -1.0001f, -1.0f, -1.0f,   // Edge: bottom left
 
         // Top face
-        -1.0f,  1.0f, -1.01f,   1.0f,  1.0f, -1.01f,   // Edge: top front
-         1.01f,  1.0f, -1.0f,   1.01f,  1.0f,  1.0f,   // Edge: top right
-         1.0f,  1.0f,  1.01f,  -1.0f,  1.0f,  1.01f,   // Edge: top back
-        -1.01f,  1.0f,  1.0f,  -1.01f,  1.0f, -1.0f,   // Edge: top left
+        -1.0f,  1.0f, -1.0001f,   1.0f,  1.0f, -1.0001f,   // Edge: top front
+         1.0001f,  1.0f, -1.0f,   1.0001f,  1.0f,  1.0f,   // Edge: top right
+         1.0f,  1.0f,  1.0001f,  -1.0f,  1.0f,  1.0001f,   // Edge: top back
+        -1.0001f,  1.0f,  1.0f,  -1.0001f,  1.0f, -1.0f,   // Edge: top left
 
         // Vertical edges
-        -1.01f, -1.0f, -1.0f,  -1.01f,  1.0f, -1.0f,   // Edge: front left
-         1.01f, -1.0f, -1.0f,   1.01f,  1.0f, -1.0f,   // Edge: front right
-         1.01f, -1.0f,  1.0f,   1.01f,  1.0f,  1.0f,   // Edge: back right
-        -1.01f, -1.0f,  1.0f,  -1.01f,  1.0f,  1.0f    // Edge: back left
+        -1.0001f, -1.0f, -1.0f,  -1.0001f,  1.0f, -1.0f,   // Edge: front left
+         1.0001f, -1.0f, -1.0f,   1.0001f,  1.0f, -1.0f,   // Edge: front right
+         1.0001f, -1.0f,  1.0f,   1.0001f,  1.0f,  1.0f,   // Edge: back right
+        -1.0001f, -1.0f,  1.0f,  -1.0001f,  1.0f,  1.0f    // Edge: back left
     };
 
     lineShader.use();
@@ -253,9 +285,147 @@ bool App::init(void* display)
         GL_FALSE, 3 * sizeof(GLfloat), (const void*)0);
     glEnableVertexAttribArray(2);
 
-    glEnable(GL_DEPTH_TEST);
-    glClearColor(0.2f, 0.6f, 0.95f, 1.0f);
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
 
+
+    //GLubyte pixels[4 * 3] =
+    //{
+    //    255, 0, 0,
+    //    0, 255, 0,
+    //    0, 0, 255,
+    //    255, 255, 0
+    //};
+
+    //glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    //glGenTextures(1, &texture1);
+    //glBindTexture(GL_TEXTURE_2D, texture1);
+
+
+
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+
+    //// Set the filtering mode
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+    //    GL_NEAREST);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+    //    GL_NEAREST);
+
+
+    GLfloat* tpositions;
+    GLuint* tindices;
+    terrData = nullptr;
+    terrainData = new TerrainData{};
+    const GLchar* const vShaderTerrainStr =
+        "#version 300 es                                      \n"
+        "uniform mat4 u_mvpMatrix;                            \n"
+        "uniform vec3 u_lightDirection;                       \n"
+        "layout(location=4)in vec4 a_position;             \n"
+        "uniform sampler2D s_texture;                         \n"
+        "out vec4 v_color;                                    \n"
+        "void main()                                          \n"
+        "{                                                    \n"
+        "   // compute vertex normal from height map          \n"
+        "   float hxl = textureOffset( s_texture,             \n"
+        "                  a_position.xy, ivec2(-1,  0) ).w;  \n"
+        "   float hxr = textureOffset( s_texture,             \n"
+        "                  a_position.xy, ivec2( 1,  0) ).w;  \n"
+        "   float hyl = textureOffset( s_texture,             \n"
+        "                  a_position.xy, ivec2( 0, -1) ).w;  \n"
+        "   float hyr = textureOffset( s_texture,             \n"
+        "                  a_position.xy, ivec2( 0,  1) ).w;  \n"
+        "   vec3 u = normalize( vec3(0.05, 0.0, hxr-hxl) );   \n"
+        "   vec3 v = normalize( vec3(0.0, 0.05, hyr-hyl) );   \n"
+        "   vec3 normal = cross( u, v );                      \n"
+        "                                                     \n"
+        "   // compute diffuse lighting                       \n" 
+        "   float diffuse = dot( normal, u_lightDirection );  \n"
+        "   v_color = vec4( vec3(diffuse), 1.0 );                 \n"
+        "                                                     \n"
+        "   // get vertex position from height map            \n"
+        "   float h = texture ( s_texture, a_position.xy ).w; \n"
+        "   vec4 v_position = vec4 ( a_position.xy,           \n"
+        "                            h/2.5,                   \n"
+        "                            a_position.w );          \n"
+        "   gl_Position = u_mvpMatrix * v_position;           \n"
+        "}                                                    \n";
+
+    const GLchar* const fShaderTerrainStr =
+        "#version 300 es                                      \n"
+        "precision mediump float;                             \n"
+        "in vec4 v_color;                                     \n"
+        "out vec4 outColor;              \n"
+        "void main()                                          \n"
+        "{                                                    \n"
+        "  outColor = v_color;                                \n"
+        "}                                                    \n";
+
+    // Load the shaders and get a linked program object
+    
+    Shader terrShd = {};
+ 
+    if (!terrShd.setup(&vShaderTerrainStr, &fShaderTerrainStr))
+    {
+        std::cout << "Shader not setup!" << std::endl;
+        return false;
+    }
+
+    terrainData->programObject = terrShd.id();
+
+    terrShd.setNULL();
+
+    glUseProgram(terrainData->programObject);
+
+    // Get the uniform locations
+    terrainData->mvpLoc = glGetUniformLocation(terrainData->programObject, "u_mvpMatrix");
+    terrainData->lightDirectionLoc = glGetUniformLocation(terrainData->programObject, "u_lightDirection");
+
+    // Get the sampler terrainData
+    terrainData->samplerLoc = glGetUniformLocation(terrainData->programObject, "s_texture");
+
+    // Load the heightmap
+    terrainData->textureId = LoadTexture(R"(assets/textures/heightmap3.tga)");
+
+    if (terrainData->textureId == 0)
+    {
+        return FALSE;
+    }
+
+
+
+    // Generate the position and indices of a square grid for the base terrain
+    terrainData->gridSize = 200;
+    terrainData->numIndices = genSquareGrid(terrainData->gridSize, &tpositions, &tindices);
+
+    // Index buffer for base terrain
+    glGenBuffers(1, &terrainData->indicesIBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, terrainData->indicesIBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, terrainData->numIndices * sizeof(GLuint),
+        tindices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    free(tindices);
+
+    // Position VBO for base terrain
+    glGenBuffers(1, &terrainData->positionVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, terrainData->positionVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+        terrainData->gridSize * terrainData->gridSize * sizeof(GLfloat) * 3,
+        tpositions, GL_STATIC_DRAW);
+    glVertexAttribPointer(4, 3, GL_FLOAT,
+        GL_FALSE, 3 * sizeof(GLfloat), (const void*)0);
+    glEnableVertexAttribArray(4);
+    free(tpositions);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisableVertexAttribArray(4);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glClearColor(0.2f, 0.6f, 0.95f, 1.0f);
+    glEnable(GL_DEPTH_TEST);
+
+    terrData = (void*)terrainData;
+   
     initialized = true;
 
     return GL_TRUE;
@@ -263,32 +433,41 @@ bool App::init(void* display)
 
 void App::update(float dt, int width, int height)
 {
+
+    windowWidth = width;
+    windowHeight = height;
+
+  /* 
+
     ESMatrix matrixBuf;
     ESMatrix matrixBuf2;
 
-    ESMatrix perspective;
-    float    aspect;
+    ESMatrix perspective;*/
+    //float    aspect;
     angle += 40.f * dt;
     if (angle >= 360.f)
         angle -= 360.f;
     // Compute the window aspect ratio
-    aspect = (GLfloat)width / (GLfloat)height;
+    //aspect = (GLfloat)width / (GLfloat)height;
 
-    // Generate a perspective matrix with a 60 degree FOV
-    matrixLoadIdentity(&perspective);
-    getPerspective(&perspective, 60.0f, aspect, 1.0f, 200.0f);
+    //// Generate a perspective matrix with a 60 degree FOV
+    //matrixLoadIdentity(&perspective);
+    //getPerspective(&perspective, 60.0f, aspect, 1.0f, 200.0f);
 
-    ESMatrix modelView;
-    matrixLoadIdentity(&modelView);
-    translate(&modelView, 0.f, 0.f, -20.f);
-    rotate(&modelView, angle, 1.f, 1.f, 0.f);
-    matrixMultiply(&matrixBuf, &modelView, &perspective);
-    basicShdr.use();
-    glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, &matrixBuf.m[0][0]);
+    //ESMatrix modelView;
+    //matrixLoadIdentity(&modelView);
+    //translate(&modelView, 0.f, 0.f, -20.f);
+    //rotate(&modelView, angle, 1.f, 1.f, 0.f);
+    //matrixMultiply(&matrixBuf, &modelView, &perspective);
+    //basicShdr.use();
+    //glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, &matrixBuf.m[0][0]);
 
-    lineShader.use();
-    matrixMultiply(&matrixBuf2, &modelView, &perspective);
-    glUniformMatrix4fv(mvpLocationLines, 1, GL_FALSE, &matrixBuf2.m[0][0]);
+    //lineShader.use();
+    //matrixMultiply(&matrixBuf2, &modelView, &perspective);
+    //glUniformMatrix4fv(mvpLocationLines, 1, GL_FALSE, &matrixBuf2.m[0][0]);
+
+       // Set the viewport
+    glViewport(0, 0, windowWidth, windowHeight);
 
 
 
@@ -297,30 +476,131 @@ void App::update(float dt, int width, int height)
 void App::render(void* display)
 {
 
-
+    
     // Clear only inside viewport with your scene color
     glClearColor(0.2f, 0.6f, 0.95f, 1.0f); // scene background color
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    basicShdr.use();
-    // Load the vertex positio
-    glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
-    glEnableVertexAttribArray(POSITION_LOC);
-    // Load the instance color buffer
-    glBindBuffer(GL_ARRAY_BUFFER, colorVBO);
-    glEnableVertexAttribArray(COLOR_LOC);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indicesIBO);
-    glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT, (void*)0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
+    ESMatrix perspective{};
+    ESMatrix modelviewTerrain{};
+    float    aspect;
+   
+
+    // Compute the window aspect ratio
+    aspect = (GLfloat)windowWidth / (GLfloat)windowHeight;
+
+    // Generate a perspective matrix with a 60 degree FOV
+    matrixLoadIdentity(&perspective);
+    getPerspective(&perspective, 60.0f, aspect, 0.1f, 1000.0f);
+
+    // Generate a model view matrix to rotate/translate the terrain
+    matrixLoadIdentity(&modelviewTerrain);
+
+    // Center the terrain
+    translate(&modelviewTerrain, -40.f, -40.5f, -20.0f);
+    scale(&modelviewTerrain, 100.f, 100.f, 100.f);
+    // Rotate
+    rotate(&modelviewTerrain, 45.0f, 1.0, 0.0, 0.0);
+
+    // Compute the final MVP by multiplying the
+    // modelview and perspective matrices together
+    matrixMultiply(&terrainData->mvpMatrix, &modelviewTerrain, &perspective);
+
+    //initMVP((void*)terrainData, windowWidth, windowHeight);
+
+ 
+    
+
+    // Use the program object
+    glUseProgram(terrainData->programObject);
+
+    // Load the vertex position
+    glBindBuffer(GL_ARRAY_BUFFER, terrainData->positionVBO);
+    glVertexAttribPointer(4, 3, GL_FLOAT,
+        GL_FALSE, 3 * sizeof(GLfloat), (const void*)NULL);
+    glEnableVertexAttribArray(4);
+
+    // Bind the index buffer
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, terrainData->indicesIBO);
+
+    // Bind the height map
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, terrainData->textureId);
+
+    // Load the MVP matrix
+    glUniformMatrix4fv(terrainData->mvpLoc, 1, GL_FALSE, (GLfloat*)&terrainData->mvpMatrix.m[0][0]);
+
+    // Load the light direction
+    glUniform3f(terrainData->lightDirectionLoc, 0.86f, 0.14f, 0.49f);
+
+    // Set the height map sampler to texture unit to 0
+    glUniform1i(terrainData->samplerLoc, 0);
+
+    // Draw the grid
+    glDrawElements(GL_TRIANGLES, terrainData->numIndices, GL_UNSIGNED_INT, (const void*)NULL);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisableVertexAttribArray(4);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    ESMatrix matrixBuf;
+    ESMatrix matrixBuf2;
+
+   // ESMatrix perspective;
+  //  float    aspect;
+   
+    // Compute the window aspect ratio
+ //   aspect = (GLfloat)windowWidth / (GLfloat)windowHeight;
+
+    // Generate a perspective matrix with a 60 degree FOV
+  //  matrixLoadIdentity(&perspective);
+ //   getPerspective(&perspective, 60.0f, aspect, 1.0f, 200.0f);
+
+    ESMatrix modelView;
+    matrixLoadIdentity(&modelView);
+    translate(&modelView, 0.f, 0.f, -5.f);
+    rotate(&modelView, angle, 1.f, 1.f, 0.f);
+    matrixMultiply(&matrixBuf, &modelView, &perspective);
    
 
   
-    
+    basicShdr.use();
+    glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, &matrixBuf.m[0][0]);
+
+
+    // Load the vertex positio
+    glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
+    glVertexAttribPointer(0, 3, GL_FLOAT,
+        GL_FALSE, 3 * sizeof(GLfloat), (const void*)NULL);
+    glEnableVertexAttribArray(0);
+    // Load the instance color buffer
+    glBindBuffer(GL_ARRAY_BUFFER, colorVBO);
+    glVertexAttribPointer(1, 4, GL_FLOAT,
+        GL_FALSE, 4 * sizeof(GLfloat), (const void*)0);
+    glEnableVertexAttribArray(1);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indicesIBO);
+    glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT, (void*)0);
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+   
     lineShader.use();
+    matrixMultiply(&matrixBuf2, &modelView, &perspective);
+    glUniformMatrix4fv(mvpLocationLines, 1, GL_FALSE, &matrixBuf2.m[0][0]);
+
+    
     glBindBuffer(GL_ARRAY_BUFFER, edgeVBO);
+    glVertexAttribPointer(2, 3, GL_FLOAT,
+        GL_FALSE, 3 * sizeof(GLfloat), (const void*)0);
     glEnableVertexAttribArray(2);
     glDrawArrays(GL_LINES, 0, 24);
+    glDisableVertexAttribArray(2);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
 
 
 
@@ -375,6 +655,8 @@ void App::render(void* display)
 
 void App::resize(void* display, void* surface, int width, int height)
 {
+    windowWidth = width;
+    windowHeight = height;
 
     const float targetAspect = 16.f / 9.f;
 
@@ -398,16 +680,18 @@ void App::resize(void* display, void* surface, int width, int height)
 
     // Clear entire window to black for letterbox bars
     glViewport(0, 0, width, height);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // black bars
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+   // glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // black bars
+   // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Set viewport to letterboxed area for rendering
     glViewport(viewX, viewY, viewWidth, viewHeight);
 
     // DO NOT clear here again - your render() will clear viewport to blue
-
-    render(display);
-    eglSwapBuffers((EGLDisplay)display, (EGLSurface)surface);
+    if (terrainData != nullptr)
+    {
+        render(display);
+    }
+ //   eglSwapBuffers((EGLDisplay)display, (EGLSurface)surface);
 
 }
 
@@ -732,7 +1016,7 @@ int App::myCube(float scale, GLfloat** vertices, GLfloat** normals, GLfloat** te
 
 void App::matrixMultiply(ESMatrix* result, ESMatrix* srcA, ESMatrix* srcB)
 {
-    ESMatrix    tmp;
+    ESMatrix    tmp{};
     int         i;
 
     for (i = 0; i < 4; i++)
@@ -879,4 +1163,149 @@ void App::rotate(ESMatrix* result, GLfloat angle, GLfloat x, GLfloat y, GLfloat 
 
         matrixMultiply(result, &rotMat, result);
     }
+}
+
+int App::genSquareGrid(int size, GLfloat** vertices, GLuint** indices)
+{
+    int i, j;
+    int numIndices = (size - 1) * (size - 1) * 2 * 3;
+    // Allocate memory for buffersb
+    if (vertices != NULL)
+    {
+        int numVertices = size * size;
+        float stepSize = (float)size - 1;
+        *vertices = (GLfloat*)malloc(sizeof(GLfloat) * 3 * numVertices);
+        for (i = 0; i < size; ++i) // row
+        {
+            for (j = 0; j < size; ++j) // column
+            {
+                (*vertices)[3 * (j + i * size)] = i / stepSize;
+                (*vertices)[3 * (j + i * size) + 1] = j / stepSize;
+                (*vertices)[3 * (j + i * size) + 2] = 0.0f;
+            }
+        }
+    }
+    // Generate the indices
+    if (indices != NULL)
+    {
+        *indices = (GLuint*)malloc(sizeof(GLuint) * numIndices);
+        for (i = 0; i < size - 1; ++i)
+        {
+            for (j = 0; j < size - 1; ++j)
+            {
+                // two triangles per quad
+                (*indices)[6 * (j + i * (size-1))] = j + (i) * (size);
+                (*indices)[6 * (j + i * (size-1)) + 1] = j + (i) * (size)+1;
+                (*indices)[6 * (j + i * (size-1)) + 2] = j + (i + 1) * (size)+1;
+                (*indices)[6 * (j + i * (size-1)) + 3] = j + (i) * (size);
+                (*indices)[6 * (j + i * (size-1)) + 4] = j + (i + 1) * (size)+1;
+                (*indices)[6 * (j + i * (size-1)) + 5] = j + (i + 1) * (size);
+            }
+        }
+    }
+    return numIndices;
+}
+
+char* App::loadTGA(const char* fileName, int* width, int* height)
+{
+    char* buffer;
+    esFile* fp=nullptr;
+    TGA_HEADER   Header;
+    int          bytesRead;
+
+    // Open the file for reading
+    fp = fileOpen(fileName);
+
+    if (fp == nullptr)
+    {
+        // Log error as 'error in opening the input file from apk'
+        std::cerr << "loadTGA FAILED to load : \n" << fileName << std::endl;
+        return NULL;
+    }
+
+    bytesRead = fileRead(fp, sizeof(TGA_HEADER), &Header);
+
+    *width = Header.Width;
+    *height = Header.Height;
+
+    if (Header.ColorDepth == 8 ||
+        Header.ColorDepth == 24 || Header.ColorDepth == 32)
+    {
+        int bytesToRead = sizeof(char) * (*width) * (*height) * Header.ColorDepth / 8;
+
+        // Allocate the image data buffer
+        buffer = (char*)malloc(bytesToRead);
+
+        if (buffer)
+        {
+            bytesRead = fileRead(fp, bytesToRead, buffer);
+            fileClose(fp);
+
+            return (buffer);
+        }
+    }
+
+    return (NULL);
+}
+
+
+GLuint App::LoadTexture(const char* fileName)
+{
+
+    int width,
+        height;
+
+    char* buffer = loadTGA(fileName, &width, &height);
+    GLuint texId;
+
+    if (buffer == NULL)
+    {
+        std::cerr << "Error loading image\n" << fileName << std::endl;
+        return 0;
+    }
+
+    glGenTextures(1, &texId);
+    glBindTexture(GL_TEXTURE_2D, texId);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, width, height, 0, GL_ALPHA, GL_UNSIGNED_BYTE, buffer);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    free(buffer);
+
+    return texId;
+}
+
+int App::initMVP(void* context, int winWidth, int winHeight)
+{
+    ESMatrix perspective;
+    ESMatrix modelview;
+    float    aspect;
+    TerrainData* userData = (TerrainData*)context;
+
+    // Compute the window aspect ratio
+    aspect = (GLfloat)winWidth / (GLfloat)winHeight;
+
+    // Generate a perspective matrix with a 60 degree FOV
+    matrixLoadIdentity(&perspective);
+    getPerspective(&perspective, 60.0f, aspect, 0.1f, 200.0f);
+
+    // Generate a model view matrix to rotate/translate the terrain
+    matrixLoadIdentity(&modelview);
+
+    // Center the terrain
+    translate(&modelview, -0.5f, -0.5f, -0.7f);
+
+    // Rotate
+    rotate(&modelview, 45.0f, 1.0, 0.0, 0.0);
+
+    // Compute the final MVP by multiplying the
+    // modelview and perspective matrices together
+    matrixMultiply(&userData->mvpMatrix, &modelview, &perspective);
+
+    initialized = true;
+
+    return TRUE;
 }

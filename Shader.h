@@ -14,6 +14,8 @@ public:
 	void use();
 	void destroy();
 	GLuint id();
+
+	void setNULL();
 };
 
 #endif
